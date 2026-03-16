@@ -247,7 +247,7 @@
                   <span class="tti-kicker">Runtime</span>
                   <h3>模型列表与默认值</h3>
                 </div>
-                <div class="tti-inline-actions">
+                <div v-if="!isNovelAiBackend" class="tti-inline-actions">
                   <button type="button" class="tti-btn ghost small" :disabled="apiBusy" @click="fetchModelList">
                     <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i>
                     {{ apiAction === 'models' ? '获取中...' : '获取模型' }}
@@ -262,12 +262,18 @@
                     <input v-model="config.model" type="text" placeholder="例如：juggernautXL_v9 / animePastelDream" />
                     <select v-if="modelOptions.length" v-model="config.model" class="tti-inline-select">
                       <option v-for="modelName in modelOptions" :key="modelName" :value="modelName">
-                        {{ modelName }}
+                        {{ getModelOptionLabel(modelName) }}
                       </option>
                     </select>
                   </div>
                   <small>
-                    {{ modelOptions.length ? `已获取 ${modelOptions.length} 个模型，可直接从下拉框选择。` : '可手动输入，或点击“获取模型”读取后端模型列表。' }}
+                    {{
+                      isNovelAiBackend
+                        ? `已内置 ${modelOptions.length} 个 NovelAI 官方图像模型，可直接选择。`
+                        : modelOptions.length
+                          ? `已获取 ${modelOptions.length} 个模型，可直接从下拉框选择。`
+                          : '可手动输入，或点击“获取模型”读取后端模型列表。'
+                    }}
                   </small>
                 </label>
 
@@ -286,7 +292,7 @@
                   <input v-model.number="config.clipSkip" type="number" min="1" max="12" />
                 </label>
 
-                <div v-if="modelFetchMessage" class="tti-report tti-field--span-2" :class="modelFetchTone">
+                <div v-if="modelFetchMessage && !isNovelAiBackend" class="tti-report tti-field--span-2" :class="modelFetchTone">
                   <i
                     :class="
                       modelFetchTone === 'ok'
@@ -558,7 +564,66 @@
           </div>
         </template>
 
-        <template v-else>
+        <template v-else-if="activeSection === 'cache'">
+          <div class="tti-grid two-up">
+            <article class="tti-panel">
+              <header class="tti-panel__header compact">
+                <div>
+                  <span class="tti-kicker">Runtime</span>
+                  <h3>消息内插图运行期</h3>
+                </div>
+              </header>
+
+              <div class="tti-form-grid one">
+                <label class="tti-toggle">
+                  <input v-model="config.runtimeEnabled" type="checkbox" />
+                  <div>
+                    <strong>启用消息内插图运行期</strong>
+                    <span>关闭后不再监听 `image###...###`，也不会把已保存插图注入到消息显示层。</span>
+                  </div>
+                </label>
+
+                <div class="tti-callout">
+                  <i class="fa-solid fa-file-image" aria-hidden="true"></i>
+                  <div>
+                    <strong>单脚本内嵌存储</strong>
+                    <p>生成成功后，图片会直接以 `data URL` 写入对应消息的 `extra.tti_image_workbench.slots`，因此同一聊天在其他浏览器打开时仍能恢复显示。</p>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="tti-panel">
+              <header class="tti-panel__header compact">
+                <div>
+                  <span class="tti-kicker">Storage</span>
+                  <h3>存储说明</h3>
+                </div>
+              </header>
+
+              <div class="tti-form-grid two">
+                <div class="tti-highlight">
+                  <span>请求发起方</span>
+                  <strong>浏览器</strong>
+                  <small>不是 SillyTavern 服务器。浏览器会直接向你配置的图像 API 发起请求。</small>
+                </div>
+
+                <div class="tti-highlight">
+                  <span>持久化位置</span>
+                  <strong>聊天文件</strong>
+                  <small>图片跟随消息一并保存，不依赖额外插件或服务端文件缓存。</small>
+                </div>
+
+                <div class="tti-report tti-field--span-2 info">
+                  <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+                  <span>因为现在是浏览器直连模式，目标 API 必须允许当前页面访问。若目标服务没有开启 CORS 或需要服务器侧代理，浏览器会直接报跨域或连通性错误。</span>
+                </div>
+              </div>
+            </article>
+          </div>
+        </template>
+
+        <template v-else-if="activeSection === 'advanced'">
           <div class="tti-grid two-up">
             <article class="tti-panel">
               <header class="tti-panel__header compact">
@@ -571,7 +636,7 @@
               <div class="tti-form-grid two">
                 <label class="tti-field">
                   <span>失败重试次数</span>
-                  <input v-model.number="config.retryCount" type="number" min="0" max="5" />
+                  <input v-model.number="config.retryCount" type="number" min="1" max="3" />
                 </label>
 
                 <label class="tti-field">
@@ -683,18 +748,19 @@ import {
   saveImageWorkbenchPresetStore,
   setActiveImageWorkbenchPreset,
   stylePresets,
+  upsertImageWorkbenchPreset,
   type BackendType,
   type ConfigSectionKey,
   type ImageWorkbenchConfig,
   type ImageWorkbenchPreset,
   type ImageWorkbenchPresetStore,
-  upsertImageWorkbenchPreset,
 } from './config';
 
 const navItems: Array<{ key: ConfigSectionKey; label: string; desc: string; icon: string }> = [
   { key: 'api', label: 'API 接入', desc: '后端与认证', icon: 'fa-solid fa-server' },
   { key: 'generation', label: '生成参数', desc: '尺寸与采样', icon: 'fa-solid fa-expand' },
   { key: 'prompt', label: '提示词策略', desc: '风格与模板', icon: 'fa-solid fa-feather-pointed' },
+  { key: 'cache', label: '存储方式', desc: '消息内嵌与运行期', icon: 'fa-solid fa-database' },
   { key: 'advanced', label: '高级配置', desc: '扩展字段与预览', icon: 'fa-solid fa-gears' },
 ];
 
@@ -714,7 +780,6 @@ type BackendPreset = {
   apiPath: string;
   authType: ImageWorkbenchConfig['authType'];
   apiHeaderName: string;
-  modelOptions?: string[];
 };
 
 const backendPresets: Record<BackendType, BackendPreset> = {
@@ -741,7 +806,6 @@ const backendPresets: Record<BackendType, BackendPreset> = {
     apiPath: '/ai/generate-image',
     authType: 'bearer',
     apiHeaderName: 'Authorization',
-    modelOptions: ['nai-diffusion-3', 'nai-diffusion-furry-3', 'safe-diffusion-3'],
   },
   custom: {
     apiBaseUrl: 'http://127.0.0.1:7860',
@@ -750,6 +814,17 @@ const backendPresets: Record<BackendType, BackendPreset> = {
     apiHeaderName: 'Authorization',
   },
 };
+
+const NOVELAI_STATIC_MODELS = [
+  { value: 'nai-diffusion-4-5-full', label: 'Anime v4.5 Full' },
+  { value: 'nai-diffusion-4-5-curated', label: 'Anime v4.5 Curated' },
+  { value: 'nai-diffusion-4-full', label: 'Anime v4 Full' },
+  { value: 'nai-diffusion-4-curated-preview', label: 'Anime v4 Curated' },
+  { value: 'nai-diffusion-3', label: 'Anime v3' },
+  { value: 'nai-diffusion-furry-3', label: 'Furry v3' },
+] as const;
+
+const novelAiModelLabelMap = Object.fromEntries(NOVELAI_STATIC_MODELS.map(item => [item.value, item.label])) as Record<string, string>;
 
 const activeSection = ref<ConfigSectionKey>('api');
 const config = ref<ImageWorkbenchConfig>({ ...defaultImageWorkbenchConfig });
@@ -769,6 +844,7 @@ const modelOptions = ref<string[]>([]);
 
 const totalImageCount = computed(() => config.value.batchSize * config.value.batchCount);
 const apiBusy = computed(() => apiAction.value !== 'idle');
+const isNovelAiBackend = computed(() => config.value.backendType === 'novelai');
 const presetList = computed(() =>
   Object.values(presetStore.value.presets).sort((a, b) => {
     if (a.id === 'default') return -1;
@@ -852,6 +928,9 @@ const requestPreview = computed(() => {
           }
         : false,
       request_control: {
+        runtime_enabled: config.value.runtimeEnabled,
+        request_origin: 'browser',
+        image_storage: 'message_extra_embedded',
         retry_count: config.value.retryCount,
         retry_interval_ms: config.value.retryIntervalMs,
         request_cooldown_ms: config.value.requestCooldownMs,
@@ -913,6 +992,10 @@ function normalizeUrl(baseUrl: string, path = ''): string {
   return `${normalizedBase}/${path.replace(/^\/+/, '')}`;
 }
 
+function getModelOptionLabel(modelName: string): string {
+  return isNovelAiBackend.value ? novelAiModelLabelMap[modelName] ?? modelName : modelName;
+}
+
 function getAuthHeaders(): Record<string, string> {
   if (config.value.authType === 'none' || !config.value.apiKey.trim()) {
     return {};
@@ -949,6 +1032,14 @@ function formatRequestError(status: number, data: unknown, fallback: string): st
   }
 
   return `[${status}] ${fallback}`;
+}
+
+function normalizeBrowserFetchError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  if (message === 'Failed to fetch' || /failed to fetch/i.test(message)) {
+    return '浏览器请求被拦截或目标不可达。请检查目标地址、网络连通性以及该接口是否允许当前页面跨域访问（CORS）。';
+  }
+  return message;
 }
 
 async function requestJson(url: string, init: RequestInit = {}): Promise<unknown> {
@@ -997,16 +1088,21 @@ function applyBackendPreset(backend: BackendType): void {
   config.value.apiPath = preset.apiPath;
   config.value.authType = preset.authType;
   config.value.apiHeaderName = preset.apiHeaderName;
-  modelOptions.value = preset.modelOptions ? [...preset.modelOptions] : [];
+  modelOptions.value = backend === 'novelai' ? NOVELAI_STATIC_MODELS.map(item => item.value) : [];
+  if (backend === 'novelai' && !config.value.model) {
+    config.value.model = NOVELAI_STATIC_MODELS[0].value;
+  }
   connectionTestMessage.value = '';
   modelFetchMessage.value = '';
   showStatus(`已套用 ${backendOptions.find(item => item.value === backend)?.label ?? backend} 预设。`, 'info');
 }
 
 function syncBackendPresetOptions(): void {
-  const preset = backendPresets[config.value.backendType];
-  if (preset?.modelOptions) {
-    modelOptions.value = [...preset.modelOptions];
+  if (config.value.backendType === 'novelai') {
+    modelOptions.value = NOVELAI_STATIC_MODELS.map(item => item.value);
+    if (!config.value.model) {
+      config.value.model = NOVELAI_STATIC_MODELS[0].value;
+    }
   } else if (config.value.backendType !== 'custom') {
     modelOptions.value = [];
   }
@@ -1019,24 +1115,39 @@ async function testApiConnection(): Promise<void> {
   try {
     let url = '';
     let init: RequestInit = { method: 'GET' };
+    let successMessage = '';
 
     if (config.value.backendType === 'sd-webui' || config.value.backendType === 'sd-forge') {
       url = normalizeUrl(config.value.apiBaseUrl, '/sdapi/v1/options');
+      successMessage = `连接成功：${url}`;
     } else if (config.value.backendType === 'comfyui') {
       url = normalizeUrl(config.value.apiBaseUrl, '/system_stats');
+      successMessage = `连接成功：${url}`;
     } else if (config.value.backendType === 'novelai') {
-      url = 'https://api.novelai.net/user/subscription';
+      url = normalizeUrl(config.value.apiBaseUrl || 'https://image.novelai.net', '/docs/index.html');
+      init = { method: 'GET' };
     } else {
       url = normalizeUrl(config.value.apiBaseUrl, config.value.apiPath || '/');
       init = { method: 'OPTIONS' };
+      successMessage = `连接成功：${url}`;
     }
 
     await requestJson(url, init);
     connectionTestTone.value = 'ok';
-    connectionTestMessage.value = `连接成功：${url}`;
-    showStatus('API 连通性测试通过。', 'ok');
+
+    if (config.value.backendType === 'novelai') {
+      successMessage = config.value.apiKey.trim()
+        ? 'NovelAI 图像服务入口可达，且已填写 Token。由于当前是浏览器直连模式，这里只检测图像服务域名可达性；Token 有效性会在首次实际生成时进一步验证。'
+        : 'NovelAI 图像服务入口可达，但当前还没有填写 Token。请填入 API Key 后再进行实际生成。';
+    }
+
+    connectionTestMessage.value = successMessage;
+    showStatus(
+      config.value.backendType === 'novelai' ? 'NovelAI 图像服务入口检测通过。' : 'API 连通性测试通过。',
+      'ok',
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : '测试失败，请检查地址、认证或跨域限制。';
+    const message = normalizeBrowserFetchError(error, '测试失败，请检查地址、认证或跨域限制。');
     connectionTestTone.value = 'warn';
     connectionTestMessage.value = message;
     showStatus('API 连通性测试失败。', 'warn');
@@ -1046,6 +1157,15 @@ async function testApiConnection(): Promise<void> {
 }
 
 async function fetchModelList(): Promise<void> {
+  if (config.value.backendType === 'novelai') {
+    modelOptions.value = NOVELAI_STATIC_MODELS.map(item => item.value);
+    modelFetchMessage.value = '';
+    if (!config.value.model) {
+      config.value.model = NOVELAI_STATIC_MODELS[0].value;
+    }
+    return;
+  }
+
   apiAction.value = 'models';
   modelFetchMessage.value = '';
 
@@ -1064,8 +1184,6 @@ async function fetchModelList(): Promise<void> {
       const data = await requestJson(normalizeUrl(config.value.apiBaseUrl, '/object_info/CheckpointLoaderSimple'));
       const comfyModels = _.get(data, 'CheckpointLoaderSimple.input.required.ckpt_name.0');
       models = (Array.isArray(comfyModels) ? comfyModels : []).map(item => String(item)).filter(Boolean);
-    } else if (config.value.backendType === 'novelai') {
-      models = [...(backendPresets.novelai.modelOptions ?? [])];
     } else {
       throw new Error('当前自定义 API 未定义统一的模型列表接口，请手动输入模型名。');
     }
@@ -1082,7 +1200,8 @@ async function fetchModelList(): Promise<void> {
         : '后端返回成功，但没有可用模型列表。';
     showStatus(modelFetchMessage.value, modelOptions.value.length > 0 ? 'ok' : 'warn');
   } catch (error) {
-    const message = error instanceof Error ? error.message : '模型列表读取失败。';
+    const message = normalizeBrowserFetchError(error, '模型列表读取失败。');
+    modelOptions.value = [];
     modelFetchTone.value = 'warn';
     modelFetchMessage.value = message;
     showStatus('获取模型列表失败。', 'warn');
@@ -1148,18 +1267,14 @@ function loadConfig(): void {
   );
 }
 
-function saveConfig(): void {
+async function saveConfig(): Promise<void> {
   const result = saveImageWorkbenchConfig(config.value);
   config.value = { ...result.config };
-  const nextStore = upsertImageWorkbenchPreset(
-    presetStore.value,
-    activePreset.value?.name ?? '默认配置',
-    result.config,
-    activePreset.value?.id ?? selectedPresetId.value,
-  );
-  presetStore.value = nextStore;
-  selectedPresetId.value = nextStore.activePresetId;
+  const persistedStore = loadImageWorkbenchPresetStore().store;
+  presetStore.value = persistedStore;
+  selectedPresetId.value = persistedStore.activePresetId;
   syncResolutionPreset();
+  syncBackendPresetOptions();
   lastSavedFingerprint.value = exportImageWorkbenchConfigJson(result.config);
 
   if (result.savedToScript && result.savedToLocal) {
@@ -1308,6 +1423,7 @@ function importPresetJson(): void {
 function resetConfig(): void {
   config.value = { ...defaultImageWorkbenchConfig };
   syncResolutionPreset();
+  syncBackendPresetOptions();
   showStatus('已恢复默认模板，当前变更尚未保存。', 'info');
 }
 
@@ -1330,7 +1446,9 @@ watch(
   () => syncBackendPresetOptions(),
 );
 
-onMounted(loadConfig);
+onMounted(() => {
+  loadConfig();
+});
 </script>
 
 <style scoped>

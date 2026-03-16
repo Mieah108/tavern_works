@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export type ConfigSectionKey = 'api' | 'generation' | 'prompt' | 'advanced';
+export type ConfigSectionKey = 'api' | 'generation' | 'prompt' | 'cache' | 'advanced';
 
 export type BackendType = 'sd-webui' | 'sd-forge' | 'comfyui' | 'novelai' | 'custom';
 export type AuthType = 'none' | 'bearer' | 'custom';
@@ -199,7 +199,11 @@ export const imageWorkbenchConfigSchema = z.object({
   autoInjectCharacterName: booleanField(false),
   appendSceneContext: booleanField(true),
 
-  retryCount: integerField(1, 0, 5),
+  runtimeEnabled: booleanField(true),
+  cacheEnabled: booleanField(true),
+  cacheMaxCount: integerField(300, 10, 5000),
+
+  retryCount: integerField(3, 1, 3),
   retryIntervalMs: integerField(1200, 200, 10000),
   requestCooldownMs: integerField(0, 0, 60000),
   saveToMessageVariable: booleanField(true),
@@ -340,29 +344,6 @@ function readPresetStoreFromLocalStorage(): ImageWorkbenchPresetStore | null {
     return normalizePresetStore(JSON.parse(raw));
   } catch {
     return null;
-  }
-}
-
-function writeToScriptVariables(config: ImageWorkbenchConfig): boolean {
-  try {
-    const variables = getVariables({ type: 'script', script_id: getScriptId() });
-    variables[CONFIG_VARIABLE_KEY] = config;
-    replaceVariables(variables, { type: 'script', script_id: getScriptId() });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function writeToLocalStorage(config: ImageWorkbenchConfig): boolean {
-  const storage = getLocalStorageRef();
-  if (!storage) return false;
-
-  try {
-    storage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(config));
-    return true;
-  } catch {
-    return false;
   }
 }
 

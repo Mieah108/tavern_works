@@ -1,6 +1,7 @@
 import $ from 'jquery';
 import App from './App.vue';
 import { FloatingWindowManager } from './FloatingWindow';
+import { destroyImageWorkbenchRuntime, initImageWorkbenchRuntime } from './runtime';
 
 const SCRIPT_ID = 'tti-image-workbench';
 const WINDOW_ID = 'tti-image-workbench-config-window';
@@ -121,6 +122,7 @@ function ensureMenuItem(): boolean {
 function cleanupRuntime(): void {
   FloatingWindowManager.getInstance().destroyAll();
   cleanupLegacyUiArtifacts();
+  destroyImageWorkbenchRuntime();
 }
 
 function initTtiExtension(): void {
@@ -129,6 +131,7 @@ function initTtiExtension(): void {
     return;
   }
 
+  initImageWorkbenchRuntime();
   console.info('[文生图] 已注入独立配置工作台入口。');
 }
 
@@ -137,4 +140,3 @@ $(() => {
   initTtiExtension();
   $(window).on('pagehide', cleanupRuntime);
 });
-
