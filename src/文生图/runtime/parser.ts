@@ -72,6 +72,7 @@ export function parseImagePromptMessage(message: ChatMessage, reasoningFallback 
       index: bodyMatchIndex,
       prompt,
       summary: summarizePrompt(prompt),
+      rawMatch: `image###${rawPrompt}###`,
       placeholderToken,
     });
     bodyMatchIndex += 1;
@@ -95,6 +96,7 @@ export function parseImagePromptMessage(message: ChatMessage, reasoningFallback 
       index,
       prompt,
       summary: summarizePrompt(prompt),
+      rawMatch: match[0] ?? undefined,
     });
   });
 

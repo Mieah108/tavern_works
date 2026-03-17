@@ -9,6 +9,7 @@ export interface ImagePromptSlot {
   index: number;
   prompt: string;
   summary: string;
+  rawMatch?: string;
   placeholderToken?: string;
 }
 

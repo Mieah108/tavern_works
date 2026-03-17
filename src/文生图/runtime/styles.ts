@@ -85,12 +85,24 @@ export function injectImageWorkbenchRuntimeStyles(): void {
 
     .tti-image-inline-slot__action {
       border-color: rgba(114, 182, 255, 0.24);
-      margin-left: auto;
     }
 
     .tti-image-inline-slot__action[disabled] {
       cursor: wait;
       opacity: 0.7;
+    }
+
+    .tti-image-inline-slot__toggle {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tti-image-inline-slot__toggle-caret {
+      font-size: 0.92em;
+      line-height: 1;
+      opacity: 0.88;
     }
 
     .tti-image-inline-slot__body {
