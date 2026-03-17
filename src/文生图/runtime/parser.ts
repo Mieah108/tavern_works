@@ -1,4 +1,5 @@
 import type { ParsedImagePromptMessage, ImagePromptSlot } from './types';
+import { buildLegacySlotId, buildStableSlotKey, normalizePromptText, summarizePromptText } from './slot-id';
 
 const IMAGE_PROMPT_REGEX = /image###([\s\S]+?)###/g;
 const REASONING_PATHS = [
@@ -23,24 +24,8 @@ function readNestedString(source: unknown, path: readonly string[]): string {
   return typeof current === 'string' ? current : '';
 }
 
-function normalizePrompt(input: string): string {
-  return input.replace(/\r\n/g, '\n').trim();
-}
-
 function buildPlaceholderToken(messageId: number, index: number): string {
   return `TTIIMAGEWORKBENCHSLOT${messageId}X${index}TOKEN`;
-}
-
-function summarizePrompt(input: string): string {
-  const compact = input.replace(/\s+/g, ' ').trim();
-  if (compact.length <= 56) {
-    return compact;
-  }
-  return `${compact.slice(0, 56)}…`;
-}
-
-function buildSlotId(messageId: number, source: 'body' | 'reasoning-only', index: number): string {
-  return `tti:${messageId}:${source}:${index}`;
 }
 
 function extractReasoningText(message: ChatMessage, fallback: string): string {
@@ -57,21 +42,27 @@ export function parseImagePromptMessage(message: ChatMessage, reasoningFallback 
   const bodySlots: ImagePromptSlot[] = [];
   let bodyTemplate = message.message;
   let bodyMatchIndex = 0;
+  const bodyPromptCounts = new Map<string, number>();
 
   bodyTemplate = bodyTemplate.replace(IMAGE_PROMPT_REGEX, (_full, rawPrompt: string) => {
-    const prompt = normalizePrompt(rawPrompt);
+    const prompt = normalizePromptText(rawPrompt);
     if (!prompt) {
       return '';
     }
 
-    const slotId = buildSlotId(message.message_id, 'body', bodyMatchIndex);
+    const nextOccurrence = (bodyPromptCounts.get(prompt) ?? 0) + 1;
+    bodyPromptCounts.set(prompt, nextOccurrence);
+    const slotKey = buildStableSlotKey('body', prompt, nextOccurrence);
+    const legacySlotId = buildLegacySlotId(message.message_id, 'body', bodyMatchIndex);
     const placeholderToken = buildPlaceholderToken(message.message_id, bodyMatchIndex);
     bodySlots.push({
-      slotId,
+      slotId: slotKey,
+      slotKey,
+      legacySlotId,
       source: 'body',
       index: bodyMatchIndex,
       prompt,
-      summary: summarizePrompt(prompt),
+      summary: summarizePromptText(prompt),
       rawMatch: `image###${rawPrompt}###`,
       placeholderToken,
     });
@@ -83,19 +74,25 @@ export function parseImagePromptMessage(message: ChatMessage, reasoningFallback 
   const reasoningMatches = Array.from(reasoningText.matchAll(IMAGE_PROMPT_REGEX));
   const bodyPromptSet = new Set(bodySlots.map(slot => slot.prompt));
   const reasoningOnlySlots: ImagePromptSlot[] = [];
+  const reasoningPromptCounts = new Map<string, number>();
 
   reasoningMatches.forEach((match, index) => {
-    const prompt = normalizePrompt(match[1] ?? '');
+    const prompt = normalizePromptText(match[1] ?? '');
     if (!prompt || bodyPromptSet.has(prompt)) {
       return;
     }
 
+    const nextOccurrence = (reasoningPromptCounts.get(prompt) ?? 0) + 1;
+    reasoningPromptCounts.set(prompt, nextOccurrence);
+    const slotKey = buildStableSlotKey('reasoning-only', prompt, nextOccurrence);
     reasoningOnlySlots.push({
-      slotId: buildSlotId(message.message_id, 'reasoning-only', index),
+      slotId: slotKey,
+      slotKey,
+      legacySlotId: buildLegacySlotId(message.message_id, 'reasoning-only', index),
       source: 'reasoning-only',
       index,
       prompt,
-      summary: summarizePrompt(prompt),
+      summary: summarizePromptText(prompt),
       rawMatch: match[0] ?? undefined,
     });
   });
@@ -105,6 +102,7 @@ export function parseImagePromptMessage(message: ChatMessage, reasoningFallback 
     bodyTemplate,
     bodySlots,
     reasoningOnlySlots,
+    persistedOnlySlots: [],
     allSlots,
     slotById: new Map(allSlots.map(slot => [slot.slotId, slot])),
   };

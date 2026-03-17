@@ -670,7 +670,7 @@
                   <i class="fa-solid fa-file-image" aria-hidden="true"></i>
                   <div>
                     <strong>单脚本内嵌存储</strong>
-                    <p>生成成功后，图片会直接以 `data URL` 写入对应消息的 `extra.tti_image_workbench.slots`，因此同一聊天在其他浏览器打开时仍能恢复显示。</p>
+                    <p>生成成功后，图片内容会直接以 `data URL` 写入对应消息的 `extra.tti_image_workbench.slots`。正文内仍能识别到插图入口时，可直接从聊天文件恢复显示。</p>
                   </div>
                 </div>
               </div>
@@ -694,7 +694,13 @@
                 <div class="tti-highlight">
                   <span>持久化位置</span>
                   <strong>聊天文件</strong>
-                  <small>图片跟随消息一并保存，不依赖额外插件或服务端文件缓存。</small>
+                  <small>图片字节跟随消息一并保存，不依赖浏览器 localStorage、额外插件或服务端文件缓存。</small>
+                </div>
+
+                <div class="tti-highlight">
+                  <span>恢复索引</span>
+                  <strong>消息变量</strong>
+                  <small>用于保存槽位标识与最近结果摘要，不会把图片插到当前消息正文未匹配到的位置。</small>
                 </div>
 
                 <div class="tti-report tti-field--span-2 info">
@@ -752,14 +758,15 @@
                 <label class="tti-toggle">
                   <input v-model="config.saveToMessageVariable" type="checkbox" />
                   <div>
-                    <strong>保存最近结果到消息变量</strong>
-                    <span>后续真正生成图片时，可把请求摘要与最近输出落到变量中。</span>
+                    <strong>写入恢复索引到消息变量</strong>
+                    <span>保存槽位标识与最近结果摘要，但前端插图仍只会出现在当前消息正文实际匹配到的入口位置。</span>
                   </div>
                 </label>
 
                 <label class="tti-field">
-                  <span>最近结果保留数量</span>
+                  <span>最近结果元数据保留数量</span>
                   <input v-model.number="config.keepLastResultCount" type="number" min="1" max="50" />
+                  <small>只裁剪消息变量中的最近结果摘要，不会删除已经写入聊天文件的图片内容。</small>
                 </label>
               </div>
             </article>

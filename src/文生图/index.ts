@@ -5,6 +5,7 @@ import { showWorkbenchToast } from './notifications';
 import { destroyImageWorkbenchRuntime, initImageWorkbenchRuntime } from './runtime';
 
 const SCRIPT_ID = 'tti-image-workbench';
+const SCRIPT_VERSION = '1.1';
 const WINDOW_ID = 'tti-image-workbench-config-window';
 const MENU_CONTAINER_ID = `${SCRIPT_ID}-extensions-menu-container`;
 const MENU_ITEM_ID = `${SCRIPT_ID}-menu-item`;
@@ -137,8 +138,8 @@ function initTtiExtension(): void {
   }
 
   initImageWorkbenchRuntime();
-  console.info('[文生图] 已注入独立配置工作台入口。');
-  showWorkbenchToast('success', '文生图脚本已启动，可从扩展菜单进入配置工作台。', {
+  console.info(`[文生图] v${SCRIPT_VERSION} 已注入独立配置工作台入口。`);
+  showWorkbenchToast('success', `文生图脚本 v${SCRIPT_VERSION} 已启动，可从扩展菜单进入配置工作台。`, {
     dedupeKey: 'tti-script-started',
     timeOut: 2600,
   });

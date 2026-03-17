@@ -1,7 +1,9 @@
 import type { ImagePromptSlot, ImageSlotRenderState, ParsedImagePromptMessage } from './types';
+import { normalizePromptText } from './slot-id';
 
 type RenderHandlers = {
   onToggle: (slotId: string) => void;
+  onTogglePrompt: (slotId: string) => void;
   onGenerate: (slotId: string) => void;
   onImageError: (slotId: string) => void;
 };
@@ -44,15 +46,31 @@ function getSlotStatusText(state: ImageSlotRenderState): string {
   return '等待生成';
 }
 
+function getSlotLabel(slot: ImagePromptSlot): string {
+  if (slot.source === 'reasoning-only') {
+    return '隐藏插图提示';
+  }
+  if (slot.source === 'persisted-only') {
+    return '已恢复插图';
+  }
+  return '插图入口';
+}
+
 function buildCardHtml(slot: ImagePromptSlot, state: ImageSlotRenderState, extraAttributes = ''): string {
   const actionLabel =
     state.status === 'generating' ? '生成中...' : state.imageUrl || state.status === 'success' ? '重新生成' : '生成插图';
 
   const metaText =
     state.status === 'success' && state.updatedAt
-      ? `最近更新：${new Date(state.updatedAt).toLocaleString()}`
+      ? slot.source === 'persisted-only'
+        ? `已从聊天记录恢复，最近更新：${new Date(state.updatedAt).toLocaleString()}`
+        : `最近更新：${new Date(state.updatedAt).toLocaleString()}`
       : slot.source === 'reasoning-only'
         ? '该提示词只出现在思维链中，已折叠汇总到正文末尾。'
+        : slot.source === 'persisted-only'
+          ? slot.persistedSource === 'reasoning-only'
+            ? '原始提示词来自思维链，当前根据聊天文件中的已保存插图恢复显示。'
+            : '原始插图入口已不可定位，当前根据聊天文件中的已保存插图恢复显示。'
         : '点击生成后会在当前位置插入插图。';
 
   return `
@@ -60,11 +78,14 @@ function buildCardHtml(slot: ImagePromptSlot, state: ImageSlotRenderState, extra
       <span class="tti-image-inline-slot__header">
         <span class="tti-image-inline-slot__pill">
           <i class="fa-solid fa-image" aria-hidden="true"></i>
-          <span>${slot.source === 'reasoning-only' ? '隐藏插图提示' : '插图入口'}</span>
+          <span>${getSlotLabel(slot)}</span>
         </span>
         <span class="tti-image-inline-slot__status ${getSlotStatusTone(state)}">${escapeHtml(getSlotStatusText(state))}</span>
         <button type="button" class="tti-image-inline-slot__action" data-action="generate" data-slot-id="${escapeHtml(slot.slotId)}" ${state.status === 'generating' ? 'disabled' : ''}>
           ${actionLabel}
+        </button>
+        <button type="button" class="tti-image-inline-slot__toggle" data-action="toggle-prompt" data-slot-id="${escapeHtml(slot.slotId)}">
+          <span class="tti-image-inline-slot__toggle-label">${state.showPrompt ? '隐藏 tags' : '显示 tags'}</span>
         </button>
         <button type="button" class="tti-image-inline-slot__toggle" data-action="toggle" data-slot-id="${escapeHtml(slot.slotId)}">
           <span class="tti-image-inline-slot__toggle-label">${state.expanded ? '收起' : '展开'}</span>
@@ -72,7 +93,7 @@ function buildCardHtml(slot: ImagePromptSlot, state: ImageSlotRenderState, extra
         </button>
       </span>
       <span class="tti-image-inline-slot__body">
-        <span class="tti-image-inline-slot__prompt">${escapeHtml(slot.prompt)}</span>
+        ${state.showPrompt ? `<span class="tti-image-inline-slot__prompt">${escapeHtml(slot.prompt)}</span>` : ''}
         <span class="tti-image-inline-slot__meta">${escapeHtml(metaText)}</span>
         ${
           state.imageUrl
@@ -85,15 +106,22 @@ function buildCardHtml(slot: ImagePromptSlot, state: ImageSlotRenderState, extra
 }
 
 function buildSummaryHtml(parsed: ParsedImagePromptMessage, states: Map<string, ImageSlotRenderState>): string {
-  const summaryHtml = parsed.reasoningOnlySlots
+  const summarySlots = [...parsed.reasoningOnlySlots, ...parsed.persistedOnlySlots];
+  const summaryHtml = summarySlots
     .map(slot => buildCardHtml(slot, states.get(slot.slotId) ?? defaultSlotState()))
     .join('');
+  const title =
+    parsed.reasoningOnlySlots.length > 0 && parsed.persistedOnlySlots.length > 0
+      ? '隐藏/已恢复插图'
+      : parsed.persistedOnlySlots.length > 0
+        ? '聊天文件中恢复的插图'
+        : '隐藏插图提示';
 
   return `
     <div class="tti-image-inline-summary" ${SUMMARY_HOST_ATTR}="true">
       <div class="tti-image-inline-summary__title">
         <i class="fa-solid fa-eye-slash" aria-hidden="true"></i>
-        <span>隐藏插图提示</span>
+        <span>${title}</span>
       </div>
       ${summaryHtml}
     </div>
@@ -104,10 +132,6 @@ function createElementFromHtml(documentRef: Document, html: string): HTMLElement
   const template = documentRef.createElement('template');
   template.innerHTML = html.trim();
   return template.content.firstElementChild as HTMLElement;
-}
-
-function normalizePrompt(input: string): string {
-  return input.replace(/\r\n/g, '\n').trim();
 }
 
 function findSlotElements($display: JQuery<HTMLDivElement>): JQuery<HTMLElement> {
@@ -242,10 +266,12 @@ function replaceMissingBodySlots(
 
   IMAGE_PROMPT_REGEX.lastIndex = 0;
   while ((regexMatch = IMAGE_PROMPT_REGEX.exec(text)) && slotCursor < missingSlots.length) {
-    const prompt = normalizePrompt(regexMatch[1] ?? '');
+    const prompt = normalizePromptText(regexMatch[1] ?? '');
     let assigned = missingSlots[slotCursor];
-    if (normalizePrompt(assigned.slot.prompt) !== prompt) {
-      const nextIndex = missingSlots.findIndex((item, index) => index >= slotCursor && normalizePrompt(item.slot.prompt) === prompt);
+    if (normalizePromptText(assigned.slot.prompt) !== prompt) {
+      const nextIndex = missingSlots.findIndex(
+        (item, index) => index >= slotCursor && normalizePromptText(item.slot.prompt) === prompt,
+      );
       if (nextIndex >= 0) {
         assigned = missingSlots[nextIndex];
         missingSlots.splice(nextIndex, 1);
@@ -335,7 +361,7 @@ function upsertReasoningSummary(
   states: Map<string, ImageSlotRenderState>,
 ): void {
   const $existing = $display.find(`[${SUMMARY_HOST_ATTR}="true"]`);
-  if (parsed.reasoningOnlySlots.length === 0) {
+  if (parsed.reasoningOnlySlots.length === 0 && parsed.persistedOnlySlots.length === 0) {
     $existing.remove();
     return;
   }
@@ -370,6 +396,14 @@ function attachHandlers($display: JQuery<HTMLDivElement>, handlers: RenderHandle
     }
   });
 
+  $display.on(`click${EVENT_NAMESPACE}`, '[data-action="toggle-prompt"]', event => {
+    event.preventDefault();
+    const slotId = String((event.currentTarget as HTMLElement).getAttribute('data-slot-id') ?? '');
+    if (slotId) {
+      handlers.onTogglePrompt(slotId);
+    }
+  });
+
   $display.find('.tti-image-inline-slot__image').off(EVENT_NAMESPACE).on(`error${EVENT_NAMESPACE}`, event => {
     const slotId = String((event.currentTarget as HTMLElement).getAttribute('data-slot-id') ?? '');
     if (slotId) {
@@ -389,7 +423,8 @@ export function renderImageSlotsIntoMessage(
   upsertBodySlots($display, parsed, states);
   upsertReasoningSummary($display, parsed, states);
 
-  const hasAnyAugmentation = parsed.bodySlots.length > 0 || parsed.reasoningOnlySlots.length > 0;
+  const hasAnyAugmentation =
+    parsed.bodySlots.length > 0 || parsed.reasoningOnlySlots.length > 0 || parsed.persistedOnlySlots.length > 0;
   if (hasAnyAugmentation) {
     $display.attr('data-tti-image-augmented', 'true');
   } else {
@@ -418,6 +453,7 @@ export function defaultSlotState(): ImageSlotRenderState {
   return {
     status: 'idle',
     expanded: false,
+    showPrompt: true,
     imageUrl: '',
     error: '',
     cacheHit: false,

@@ -1,11 +1,18 @@
 import { loadImageWorkbenchConfig } from '../config';
 import { showWorkbenchToast } from '../notifications';
-import { clearMessageSlotState, getMessageSlotState, getMessageImageStore, saveMessageSlotState } from './message-state';
+import {
+  clearMessageSlotState,
+  getMessageImageStore,
+  getMessageSlotState,
+  resolveMessageSlotState,
+  saveMessageSlotState,
+} from './message-state';
+import { clearMessageImageRecoveryEntry, saveMessageImageRecoveryEntry } from './message-index';
 import { parseImagePromptMessage } from './parser';
 import { renderImageSlotsIntoMessage, restoreOriginalMessageHtml, defaultSlotState } from './renderer';
 import { injectImageWorkbenchRuntimeStyles } from './styles';
 import { generateImageForSlot } from './generator';
-import type { ImageSlotRenderState, ParsedImagePromptMessage } from './types';
+import type { ImagePromptSlot, ImageSlotRenderState, ParsedImagePromptMessage } from './types';
 
 const RUNTIME_GUARD_KEY = '__tti_image_workbench_runtime__';
 
@@ -27,6 +34,12 @@ function getJQueryRef(): JQueryStatic {
 
 function isAssistantMessage(message: ChatMessage | null): boolean {
   return Boolean(message && message.role === 'assistant' && !message.is_hidden);
+}
+
+function cloneSlot(slot: ImagePromptSlot): ImagePromptSlot {
+  return {
+    ...slot,
+  };
 }
 
 class ImageWorkbenchRuntime {
@@ -97,6 +110,27 @@ class ImageWorkbenchRuntime {
     return created;
   }
 
+  private getAssistantMessage(messageId: number): ChatMessage | null {
+    const message = getChatMessages(messageId)[0] ?? null;
+    return isAssistantMessage(message) ? message : null;
+  }
+
+  private createMergedParsedMessage(message: ChatMessage): ParsedImagePromptMessage {
+    const parsedLive = parseImagePromptMessage(message, this.reasoningCache.get(message.message_id) ?? '');
+    const bodySlots = parsedLive.bodySlots.map(cloneSlot);
+    const reasoningOnlySlots = parsedLive.reasoningOnlySlots.map(cloneSlot);
+    const persistedOnlySlots: ImagePromptSlot[] = [];
+    const allSlots = [...bodySlots, ...reasoningOnlySlots];
+    return {
+      bodyTemplate: parsedLive.bodyTemplate,
+      bodySlots,
+      reasoningOnlySlots,
+      persistedOnlySlots,
+      allSlots,
+      slotById: new Map(allSlots.map(slot => [slot.slotId, slot])),
+    };
+  }
+
   private syncStatesFromMessage(message: ChatMessage, parsed: ParsedImagePromptMessage): Map<string, ImageSlotRenderState> {
     const states = this.ensureSlotStateMap(message.message_id);
     const existingStore = getMessageImageStore(message);
@@ -110,7 +144,10 @@ class ImageWorkbenchRuntime {
 
     parsed.allSlots.forEach(slot => {
       const current = states.get(slot.slotId) ?? defaultSlotState();
-      const persisted = existingStore.slots[slot.slotId];
+      const persisted = resolveMessageSlotState(existingStore, {
+        slotKey: slot.slotKey,
+        legacySlotId: slot.legacySlotId,
+      })?.state;
 
       if (current.status !== 'generating') {
         if (persisted?.imageUrl) {
@@ -118,8 +155,17 @@ class ImageWorkbenchRuntime {
           current.imageUrl = persisted.imageUrl;
           current.updatedAt = persisted.updatedAt;
           current.error = '';
-        } else if (current.status === 'success' && !current.imageUrl) {
-          current.status = 'idle';
+          current.cacheHit = true;
+        } else if (current.status === 'success' && current.imageUrl) {
+          current.cacheHit = false;
+        } else {
+          current.imageUrl = '';
+          current.updatedAt = null;
+          current.error = '';
+          current.cacheHit = false;
+          if (current.status === 'success') {
+            current.status = 'idle';
+          }
         }
       }
 
@@ -127,11 +173,6 @@ class ImageWorkbenchRuntime {
     });
 
     return states;
-  }
-
-  private getAssistantMessage(messageId: number): ChatMessage | null {
-    const message = getChatMessages(messageId)[0] ?? null;
-    return isAssistantMessage(message) ? message : null;
   }
 
   private scheduleRender(messageId: number): void {
@@ -158,7 +199,7 @@ class ImageWorkbenchRuntime {
       return;
     }
 
-    const parsed = this.parsedCache.get(messageId) ?? parseImagePromptMessage(message, this.reasoningCache.get(messageId) ?? '');
+    const parsed = this.parsedCache.get(messageId) ?? this.createMergedParsedMessage(message);
     this.parsedCache.set(messageId, parsed);
 
     const slot = parsed.slotById.get(slotId);
@@ -168,7 +209,10 @@ class ImageWorkbenchRuntime {
 
     const stateMap = this.ensureSlotStateMap(messageId);
     const state = stateMap.get(slotId) ?? defaultSlotState();
-    const previousBinding = getMessageSlotState(message, slotId);
+    const previousBinding = getMessageSlotState(message, {
+      slotKey: slot.slotKey,
+      legacySlotId: slot.legacySlotId,
+    });
 
     state.status = 'generating';
     state.expanded = true;
@@ -178,29 +222,58 @@ class ImageWorkbenchRuntime {
 
     try {
       const result = await generateImageForSlot(messageId, slot, Boolean(previousBinding?.imageUrl));
-      await saveMessageSlotState(messageId, slotId, {
+      const updatedAt = Date.now();
+      const persistedSource = slot.source === 'persisted-only' ? slot.persistedSource ?? 'body' : slot.source;
+
+      state.status = 'success';
+      state.imageUrl = result.imageUrl;
+      state.cacheHit = result.cacheHit;
+      state.updatedAt = updatedAt;
+      state.error = '';
+      stateMap.set(slotId, state);
+      await this.renderMessage(messageId);
+
+      await saveMessageSlotState(messageId, {
         imageUrl: result.imageUrl,
         prompt: result.finalPrompt,
-        updatedAt: Date.now(),
+        updatedAt,
+        slotKey: slot.slotKey,
+        legacySlotId: slot.legacySlotId,
+        source: persistedSource,
+        originalPrompt: slot.prompt,
         mimeType: result.mimeType,
         byteLength: result.byteLength,
         storage: 'embedded',
-      });
+      }, { refresh: 'none' });
+
+      const { config } = loadImageWorkbenchConfig();
+      if (config.saveToMessageVariable) {
+        saveMessageImageRecoveryEntry(
+          messageId,
+          {
+            slotKey: slot.slotKey,
+            legacySlotId: slot.legacySlotId,
+            source: persistedSource,
+            originalPrompt: slot.prompt,
+            finalPrompt: result.finalPrompt,
+            summary: slot.summary,
+            updatedAt,
+            storage: 'embedded',
+          },
+          config.keepLastResultCount,
+        );
+      }
+
       showWorkbenchToast('success', `第 ${messageId} 楼插图已保存到当前聊天记录。`, {
         title: '文生图保存',
         dedupeKey: `tti-slot-saved-${messageId}-${slotId}`,
         timeOut: 2600,
       });
-
-      state.status = 'success';
-      state.imageUrl = result.imageUrl;
-      state.cacheHit = result.cacheHit;
-      state.updatedAt = Date.now();
-      state.error = '';
     } catch (error) {
       state.status = 'error';
       state.error = error instanceof Error ? error.message : '生成失败。';
       state.imageUrl = '';
+      state.cacheHit = false;
     }
 
     stateMap.set(slotId, state);
@@ -208,7 +281,15 @@ class ImageWorkbenchRuntime {
   }
 
   private async handleImageMissing(messageId: number, slotId: string): Promise<void> {
-    await clearMessageSlotState(messageId, slotId);
+    const parsed = this.parsedCache.get(messageId);
+    const slot = parsed?.slotById.get(slotId);
+    const matcher = {
+      slotKey: slot?.slotKey ?? slotId,
+      legacySlotId: slot?.legacySlotId,
+    };
+
+    await clearMessageSlotState(messageId, matcher, { refresh: 'none' });
+    clearMessageImageRecoveryEntry(messageId, matcher);
     showWorkbenchToast('warning', `第 ${messageId} 楼的缓存图片已失效，需重新生成。`, {
       title: '文生图缓存',
       dedupeKey: `tti-slot-missing-${messageId}-${slotId}`,
@@ -218,6 +299,7 @@ class ImageWorkbenchRuntime {
     state.status = 'error';
     state.error = '缓存图片已失效，请重新生成。';
     state.imageUrl = '';
+    state.cacheHit = false;
     state.expanded = true;
     this.ensureSlotStateMap(messageId).set(slotId, state);
     await this.renderMessage(messageId);
@@ -227,6 +309,14 @@ class ImageWorkbenchRuntime {
     const stateMap = this.ensureSlotStateMap(messageId);
     const state = stateMap.get(slotId) ?? defaultSlotState();
     state.expanded = !state.expanded;
+    stateMap.set(slotId, state);
+    void this.renderMessage(messageId);
+  }
+
+  private toggleSlotPrompt(messageId: number, slotId: string): void {
+    const stateMap = this.ensureSlotStateMap(messageId);
+    const state = stateMap.get(slotId) ?? defaultSlotState();
+    state.showPrompt = !state.showPrompt;
     stateMap.set(slotId, state);
     void this.renderMessage(messageId);
   }
@@ -257,7 +347,7 @@ class ImageWorkbenchRuntime {
       return;
     }
 
-    const parsed = parseImagePromptMessage(message, this.reasoningCache.get(messageId) ?? '');
+    const parsed = this.createMergedParsedMessage(message);
     this.parsedCache.set(messageId, parsed);
 
     if (parsed.allSlots.length === 0) {
@@ -267,10 +357,11 @@ class ImageWorkbenchRuntime {
 
     const states = this.syncStatesFromMessage(message, parsed);
     renderImageSlotsIntoMessage(messageId, $display, parsed, states, {
-      onToggle: slotId => this.toggleSlot(messageId, slotId),
-      onGenerate: slotId => this.handleGenerate(messageId, slotId),
-      onImageError: slotId => {
-        void this.handleImageMissing(messageId, slotId);
+      onToggle: nextSlotId => this.toggleSlot(messageId, nextSlotId),
+      onTogglePrompt: nextSlotId => this.toggleSlotPrompt(messageId, nextSlotId),
+      onGenerate: nextSlotId => this.handleGenerate(messageId, nextSlotId),
+      onImageError: nextSlotId => {
+        void this.handleImageMissing(messageId, nextSlotId);
       },
     });
   }
