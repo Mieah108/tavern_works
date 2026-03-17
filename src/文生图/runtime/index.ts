@@ -1,4 +1,5 @@
 import { loadImageWorkbenchConfig } from '../config';
+import { showWorkbenchToast } from '../notifications';
 import { clearMessageSlotState, getMessageSlotState, getMessageImageStore, saveMessageSlotState } from './message-state';
 import { parseImagePromptMessage } from './parser';
 import { renderImageSlotsIntoMessage, restoreOriginalMessageHtml, defaultSlotState } from './renderer';
@@ -185,6 +186,11 @@ class ImageWorkbenchRuntime {
         byteLength: result.byteLength,
         storage: 'embedded',
       });
+      showWorkbenchToast('success', `第 ${messageId} 楼插图已保存到当前聊天记录。`, {
+        title: '文生图保存',
+        dedupeKey: `tti-slot-saved-${messageId}-${slotId}`,
+        timeOut: 2600,
+      });
 
       state.status = 'success';
       state.imageUrl = result.imageUrl;
@@ -203,6 +209,11 @@ class ImageWorkbenchRuntime {
 
   private async handleImageMissing(messageId: number, slotId: string): Promise<void> {
     await clearMessageSlotState(messageId, slotId);
+    showWorkbenchToast('warning', `第 ${messageId} 楼的缓存图片已失效，需重新生成。`, {
+      title: '文生图缓存',
+      dedupeKey: `tti-slot-missing-${messageId}-${slotId}`,
+      timeOut: 3600,
+    });
     const state = this.ensureSlotStateMap(messageId).get(slotId) ?? defaultSlotState();
     state.status = 'error';
     state.error = '缓存图片已失效，请重新生成。';

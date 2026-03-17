@@ -10,6 +10,11 @@ type NormalizedImageValue =
       url: string;
     };
 
+const NOVELAI_DEFAULT_SAMPLER = 'k_dpmpp_2m';
+const NOVELAI_DEFAULT_NOISE_SCHEDULE = 'karras';
+const NOVELAI_V4_DEFAULT_SAMPLER = 'k_euler_ancestral';
+const NOVELAI_V4_DEFAULT_NOISE_SCHEDULE = 'karras';
+
 function parseJsonObject(raw: string): Record<string, unknown> {
   if (!raw.trim()) {
     return {};
@@ -81,6 +86,210 @@ function getRequestHeaders(config: ImageWorkbenchConfig): Record<string, string>
       Object.entries(parseJsonObject(config.extraHeadersJson)).map(([key, value]) => [key, String(value)]),
     ),
   };
+}
+
+function normalizeNovelAiSampler(raw: string): string {
+  const value = String(raw || '').trim().toLowerCase();
+  if (!value) {
+    return NOVELAI_DEFAULT_SAMPLER;
+  }
+
+  if (/^k_[a-z0-9_]+$/.test(value)) {
+    return value;
+  }
+
+  const map: Record<string, string> = {
+    'dpm++ 2m karras': 'k_dpmpp_2m',
+    'dpm++ 2m': 'k_dpmpp_2m',
+    'dpmpp 2m karras': 'k_dpmpp_2m',
+    'dpmpp 2m': 'k_dpmpp_2m',
+    'euler a': 'k_euler_ancestral',
+    euler: 'k_euler',
+    ddim: 'ddim',
+  };
+
+  if (map[value]) {
+    return map[value];
+  }
+
+  const compact = value.replace(/[^a-z0-9]+/g, ' ').trim();
+  if (/\bdpm\b/.test(compact) && /\b2m\b/.test(compact)) {
+    return 'k_dpmpp_2m';
+  }
+  if (/\beuler\b/.test(compact) && /\bancestral\b|\ba\b/.test(compact)) {
+    return 'k_euler_ancestral';
+  }
+  if (compact === 'euler') {
+    return 'k_euler';
+  }
+  if (compact === 'ddim') {
+    return 'ddim';
+  }
+
+  return NOVELAI_DEFAULT_SAMPLER;
+}
+
+function normalizeNovelAiNoiseSchedule(raw: string): string {
+  const value = String(raw || '').trim().toLowerCase();
+  if (!value) {
+    return NOVELAI_DEFAULT_NOISE_SCHEDULE;
+  }
+
+  if (value.includes('native')) {
+    return 'native';
+  }
+  if (value.includes('poly')) {
+    return 'polyexponential';
+  }
+  if (value.includes('exponential')) {
+    return 'exponential';
+  }
+  if (value.includes('karras')) {
+    return 'karras';
+  }
+
+  return NOVELAI_DEFAULT_NOISE_SCHEDULE;
+}
+
+function isNovelAiV4Model(model: string): boolean {
+  return /^nai-diffusion-4(?:-|$)/i.test(String(model || '').trim());
+}
+
+function getNovelAiDefaultSampler(model: string): string {
+  return isNovelAiV4Model(model) ? NOVELAI_V4_DEFAULT_SAMPLER : NOVELAI_DEFAULT_SAMPLER;
+}
+
+function getNovelAiDefaultNoiseSchedule(model: string): string {
+  return isNovelAiV4Model(model) ? NOVELAI_V4_DEFAULT_NOISE_SCHEDULE : NOVELAI_DEFAULT_NOISE_SCHEDULE;
+}
+
+function shouldPreferNovelAiModelDefaultSampler(raw: string, model: string): boolean {
+  const value = String(raw || '').trim().toLowerCase();
+  if (!value) {
+    return true;
+  }
+
+  if (!isNovelAiV4Model(model)) {
+    return false;
+  }
+
+  return [
+    'dpm++ 2m karras',
+    'dpm++ 2m',
+    'dpmpp 2m karras',
+    'dpmpp 2m',
+    'k_dpmpp_2m',
+  ].includes(value);
+}
+
+function getNovelAiEffectiveSampler(raw: string, model: string): string {
+  if (shouldPreferNovelAiModelDefaultSampler(raw, model)) {
+    return getNovelAiDefaultSampler(model);
+  }
+
+  return normalizeNovelAiSampler(raw);
+}
+
+function getNovelAiEffectiveNoiseSchedule(raw: string, model: string): string {
+  const value = String(raw || '').trim();
+  if (!value) {
+    return getNovelAiDefaultNoiseSchedule(model);
+  }
+
+  return normalizeNovelAiNoiseSchedule(raw);
+}
+
+function normalizeNovelAiSeed(seed: number): number {
+  return seed >= 0 ? seed : Math.floor(Math.random() * 999999999);
+}
+
+function buildNovelAiV4Prompt(prompt: string): Record<string, unknown> {
+  return {
+    caption: {
+      base_caption: prompt,
+      char_captions: [],
+    },
+    use_coords: false,
+    use_order: true,
+  };
+}
+
+function buildNovelAiV4NegativePrompt(negativePrompt: string): Record<string, unknown> {
+  return {
+    legacy_uc: false,
+    caption: {
+      base_caption: negativePrompt,
+      char_captions: [],
+    },
+  };
+}
+
+function buildNovelAiRequestBody(
+  request: GenerateImageRequest,
+  overrides: Partial<{
+    model: string;
+    sampler: string;
+    noiseSchedule: string;
+    includeNoiseSchedule: boolean;
+  }> = {},
+): Record<string, unknown> {
+  const model = overrides.model || request.config.model || 'nai-diffusion-3';
+  const sampler =
+    overrides.sampler ||
+    getNovelAiEffectiveSampler(request.config.sampler, model) ||
+    getNovelAiDefaultSampler(model);
+  const normalizedSampler = sampler || getNovelAiDefaultSampler(model);
+  const normalizedNoiseSchedule =
+    overrides.noiseSchedule ||
+    getNovelAiEffectiveNoiseSchedule(request.config.scheduler, model) ||
+    getNovelAiDefaultNoiseSchedule(model);
+  const includeNoiseSchedule = overrides.includeNoiseSchedule ?? normalizedSampler !== 'ddim';
+
+  const parameters: Record<string, unknown> = {
+    cfg_rescale: 0,
+    controlnet_strength: 1,
+    dynamic_thresholding: true,
+    skip_cfg_above_sigma: null,
+    legacy: false,
+    legacy_uc: false,
+    legacy_v3_extend: false,
+    params_version: 3,
+    width: request.config.width,
+    height: request.config.height,
+    scale: request.config.cfgScale,
+    steps: request.config.steps,
+    sampler: normalizedSampler,
+    seed: normalizeNovelAiSeed(request.config.seed),
+    n_samples: 1,
+    ucPreset: 0,
+    qualityToggle: false,
+    negative_prompt: request.negativePrompt,
+    sm: false,
+    sm_dyn: false,
+    autoSmea: false,
+  };
+
+  if (includeNoiseSchedule) {
+    parameters.noise_schedule = normalizedNoiseSchedule;
+  }
+
+  if (isNovelAiV4Model(model)) {
+    parameters.use_coords = false;
+    parameters.prefer_brownian = true;
+    parameters.deliberate_euler_ancestral_bug = false;
+    parameters.v4_prompt = buildNovelAiV4Prompt(request.finalPrompt);
+    parameters.v4_negative_prompt = buildNovelAiV4NegativePrompt(request.negativePrompt);
+  }
+
+  return mergeDeep(
+    {
+      action: 'generate',
+      input: request.finalPrompt,
+      model,
+      parameters,
+    },
+    parseJsonObject(request.config.extraPayloadJson),
+  );
 }
 
 function buildSdPayload(request: GenerateImageRequest): Record<string, unknown> {
@@ -279,7 +488,7 @@ function formatRequestError(status: number, payload: unknown, fallback: string):
   }
 
   if (payload && typeof payload === 'object') {
-    const message =
+    const message: unknown =
       _.get(payload, 'detail.message') ??
       _.get(payload, 'detail') ??
       _.get(payload, 'message') ??
@@ -303,12 +512,18 @@ function uint32(view: DataView, offset: number): number {
   return view.getUint32(offset, true);
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
 async function inflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
   if (typeof DecompressionStream === 'undefined') {
     throw new Error('当前浏览器不支持 NovelAI 压缩包解压，请改用支持 DecompressionStream 的浏览器。');
   }
 
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  const stream = new Blob([toArrayBuffer(bytes)]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
@@ -374,12 +589,12 @@ async function extractZipImage(archive: ArrayBuffer): Promise<{ blob: Blob; mime
         : 'image/png';
 
     if (compressionMethod === 0) {
-      return { blob: new Blob([compressed], { type: mimeType }), mimeType };
+      return { blob: new Blob([toArrayBuffer(compressed)], { type: mimeType }), mimeType };
     }
 
     if (compressionMethod === 8) {
       const inflated = await inflateRaw(compressed);
-      return { blob: new Blob([inflated], { type: mimeType }), mimeType };
+      return { blob: new Blob([toArrayBuffer(inflated)], { type: mimeType }), mimeType };
     }
 
     throw new Error(`NovelAI 压缩包使用了暂不支持的压缩方式：${compressionMethod}`);
@@ -456,51 +671,90 @@ async function generateViaNovelAi(
   request: GenerateImageRequest,
 ): Promise<{ imageUrl: string; mimeType: string; byteLength: number }> {
   const targetUrl = normalizeUrl(request.config.apiBaseUrl || 'https://image.novelai.net', request.config.apiPath || '/ai/generate-image');
-  const response = await fetchWithTimeout(
-    targetUrl,
+  const model = request.config.model || 'nai-diffusion-3';
+  const baseSampler = getNovelAiEffectiveSampler(request.config.sampler, model) || getNovelAiDefaultSampler(model);
+  const baseNoiseSchedule = getNovelAiEffectiveNoiseSchedule(request.config.scheduler, model) || getNovelAiDefaultNoiseSchedule(model);
+  const variants: Array<{
+    label: string;
+    sampler: string;
+    noiseSchedule: string;
+    includeNoiseSchedule: boolean;
+  }> = [
     {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getRequestHeaders(request.config),
-      },
-      body: JSON.stringify({
-        action: 'generate',
-        input: request.finalPrompt,
-        model: request.config.model || 'nai-diffusion-3',
-        parameters: {
-          params_version: 3,
-          width: request.config.width,
-          height: request.config.height,
-          scale: request.config.cfgScale,
-          steps: request.config.steps,
-          sampler: request.config.sampler || 'k_dpmpp_2m',
-          noise_schedule: request.config.scheduler || 'karras',
-          negative_prompt: request.negativePrompt,
-          seed: request.config.seed >= 0 ? request.config.seed : Math.floor(Math.random() * 999999999),
-          n_samples: 1,
-          ucPreset: 0,
-          qualityToggle: false,
-          sm: false,
-          sm_dyn: false,
-          uncond_scale: 1,
-        },
-      }),
+      label: 'current',
+      sampler: baseSampler,
+      noiseSchedule: baseNoiseSchedule,
+      includeNoiseSchedule: baseSampler !== 'ddim',
     },
-    request.config.timeoutSeconds,
-  );
+  ];
 
-  if (!response.ok) {
-    throw formatRequestError(response.status, await readJsonResponse(response), 'NovelAI 生图失败');
+  if (isNovelAiV4Model(model) && (baseSampler !== NOVELAI_V4_DEFAULT_SAMPLER || baseNoiseSchedule !== NOVELAI_V4_DEFAULT_NOISE_SCHEDULE)) {
+    variants.push({
+      label: 'v4-safe-defaults',
+      sampler: NOVELAI_V4_DEFAULT_SAMPLER,
+      noiseSchedule: NOVELAI_V4_DEFAULT_NOISE_SCHEDULE,
+      includeNoiseSchedule: true,
+    });
   }
 
-  const archive = await response.arrayBuffer();
-  const { blob, mimeType } = await extractZipImage(archive);
-  return {
-    imageUrl: await blobToDataUrl(blob),
-    mimeType,
-    byteLength: blob.size,
-  };
+  if (baseSampler !== 'ddim') {
+    variants.push({
+      label: 'without-noise-schedule',
+      sampler: variants[variants.length - 1].sampler,
+      noiseSchedule: variants[variants.length - 1].noiseSchedule,
+      includeNoiseSchedule: false,
+    });
+  }
+
+  let lastError: Error | null = null;
+  for (const variant of variants) {
+    const response = await fetchWithTimeout(
+      targetUrl,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getRequestHeaders(request.config),
+          Accept: 'application/zip, application/octet-stream, application/json, text/plain, */*',
+        },
+        body: JSON.stringify(
+          buildNovelAiRequestBody(request, {
+            model,
+            sampler: variant.sampler,
+            noiseSchedule: variant.noiseSchedule,
+            includeNoiseSchedule: variant.includeNoiseSchedule,
+          }),
+        ),
+      },
+      request.config.timeoutSeconds,
+    );
+
+    if (response.ok) {
+      const archive = await response.arrayBuffer();
+      const { blob, mimeType } = await extractZipImage(archive);
+      return {
+        imageUrl: await blobToDataUrl(blob),
+        mimeType,
+        byteLength: blob.size,
+      };
+    }
+
+    const payload = await readJsonResponse(response);
+    const error = formatRequestError(response.status, payload, 'NovelAI 生图失败');
+    lastError = error;
+
+    if (response.status < 500) {
+      throw error;
+    }
+  }
+
+  const samplerSummary = variants.map(variant => variant.sampler).join(' -> ');
+  const scheduleSummary = variants
+    .map(variant => (variant.includeNoiseSchedule ? variant.noiseSchedule : '(none)'))
+    .join(' -> ');
+  throw new Error(
+    `${lastError?.message ?? '[500] NovelAI 生图失败'}。已尝试兼容参数回退：model=${model}，sampler=${samplerSummary}，noise_schedule=${scheduleSummary}。`,
+  );
 }
 
 async function generateViaCustom(

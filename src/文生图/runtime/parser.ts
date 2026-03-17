@@ -27,6 +27,10 @@ function normalizePrompt(input: string): string {
   return input.replace(/\r\n/g, '\n').trim();
 }
 
+function buildPlaceholderToken(messageId: number, index: number): string {
+  return `TTIIMAGEWORKBENCHSLOT${messageId}X${index}TOKEN`;
+}
+
 function summarizePrompt(input: string): string {
   const compact = input.replace(/\s+/g, ' ').trim();
   if (compact.length <= 56) {
@@ -61,7 +65,7 @@ export function parseImagePromptMessage(message: ChatMessage, reasoningFallback 
     }
 
     const slotId = buildSlotId(message.message_id, 'body', bodyMatchIndex);
-    const placeholderToken = `__TTI_IMAGE_SLOT_${message.message_id}_${bodyMatchIndex}__`;
+    const placeholderToken = buildPlaceholderToken(message.message_id, bodyMatchIndex);
     bodySlots.push({
       slotId,
       source: 'body',

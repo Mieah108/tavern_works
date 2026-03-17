@@ -1,6 +1,7 @@
 import $ from 'jquery';
 import App from './App.vue';
 import { FloatingWindowManager } from './FloatingWindow';
+import { showWorkbenchToast } from './notifications';
 import { destroyImageWorkbenchRuntime, initImageWorkbenchRuntime } from './runtime';
 
 const SCRIPT_ID = 'tti-image-workbench';
@@ -53,6 +54,10 @@ function openConfigWindow(): void {
     },
     App,
   );
+  showWorkbenchToast('info', '已打开文生图配置工作台。', {
+    dedupeKey: 'tti-open-config-window',
+    timeOut: 2200,
+  });
 }
 
 function cleanupLegacyUiArtifacts(): void {
@@ -133,6 +138,10 @@ function initTtiExtension(): void {
 
   initImageWorkbenchRuntime();
   console.info('[文生图] 已注入独立配置工作台入口。');
+  showWorkbenchToast('success', '文生图脚本已启动，可从扩展菜单进入配置工作台。', {
+    dedupeKey: 'tti-script-started',
+    timeOut: 2600,
+  });
 }
 
 $(() => {

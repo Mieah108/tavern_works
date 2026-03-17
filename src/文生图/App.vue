@@ -279,12 +279,26 @@
 
                 <label class="tti-field">
                   <span>采样器</span>
-                  <input v-model="config.sampler" type="text" placeholder="DPM++ 2M Karras" />
+                  <div class="tti-inline-field">
+                    <input v-model="config.sampler" type="text" placeholder="DPM++ 2M Karras" />
+                    <select v-if="samplerOptionsForCurrentBackend.length" v-model="config.sampler" class="tti-inline-select">
+                      <option v-for="item in samplerOptionsForCurrentBackend" :key="item.value" :value="item.value">
+                        {{ item.label }}
+                      </option>
+                    </select>
+                  </div>
                 </label>
 
                 <label class="tti-field">
                   <span>调度器</span>
-                  <input v-model="config.scheduler" type="text" placeholder="karras / normal" />
+                  <div class="tti-inline-field">
+                    <input v-model="config.scheduler" type="text" placeholder="karras / normal" />
+                    <select v-if="schedulerOptionsForCurrentBackend.length" v-model="config.scheduler" class="tti-inline-select">
+                      <option v-for="item in schedulerOptionsForCurrentBackend" :key="item.value" :value="item.value">
+                        {{ item.label }}
+                      </option>
+                    </select>
+                  </div>
                 </label>
 
                 <label class="tti-field">
@@ -316,6 +330,75 @@
               </div>
             </article>
           </div>
+
+          <article class="tti-panel tti-panel--dense">
+            <header class="tti-panel__header">
+              <div>
+                <span class="tti-kicker">Test Run</span>
+                <h3>生图测试栏</h3>
+              </div>
+              <div class="tti-inline-actions">
+                <button type="button" class="tti-btn primary small" :disabled="apiBusy" @click="runImageTestGeneration">
+                  <i class="fa-solid fa-image" aria-hidden="true"></i>
+                  {{ imageTestBusy ? '生成中...' : '测试生图' }}
+                </button>
+                <button type="button" class="tti-btn ghost small" :disabled="!imageTestImageUrl || apiBusy" @click="clearImageTestResult">
+                  <i class="fa-solid fa-trash" aria-hidden="true"></i>
+                  清空结果
+                </button>
+              </div>
+            </header>
+
+            <div class="tti-form-grid one">
+              <label class="tti-field">
+                <span>测试提示词</span>
+                <textarea
+                  v-model="imageTestPrompt"
+                  rows="4"
+                  placeholder="例如：1girl, upper body portrait, cinematic lighting, detailed eyes, fantasy outfit"
+                ></textarea>
+                <small>会复用当前 API 连接、模型、采样和扩展参数；测试时会强制仅生成 1 张图片。</small>
+              </label>
+
+              <div v-if="imageTestMessage" class="tti-report" :class="imageTestTone">
+                <i
+                  :class="
+                    imageTestTone === 'ok'
+                      ? 'fa-solid fa-circle-check'
+                      : imageTestTone === 'warn'
+                        ? 'fa-solid fa-triangle-exclamation'
+                        : 'fa-solid fa-circle-info'
+                  "
+                  aria-hidden="true"
+                ></i>
+                <span>{{ imageTestMessage }}</span>
+              </div>
+
+              <div v-if="imageTestImageUrl" class="tti-test-result">
+                <img class="tti-test-result__image" :src="imageTestImageUrl" alt="生图测试结果" />
+                <div class="tti-test-result__meta">
+                  <span v-if="imageTestMeta">
+                    {{ imageTestMeta.mimeType }}
+                    <template v-if="typeof imageTestMeta.byteLength === 'number'"> / {{ formatByteSize(imageTestMeta.byteLength) }}</template>
+                    / {{ (imageTestMeta.durationMs / 1000).toFixed(2) }} 秒
+                  </span>
+                </div>
+                <details class="tti-test-result__details">
+                  <summary>查看本次最终提示词</summary>
+                  <div class="tti-test-result__prompts">
+                    <div>
+                      <span>最终正向词</span>
+                      <pre>{{ imageTestFinalPrompt }}</pre>
+                    </div>
+                    <div>
+                      <span>负向词</span>
+                      <pre>{{ imageTestNegativePrompt || '(空)' }}</pre>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </article>
         </template>
 
         <template v-else-if="activeSection === 'generation'">
@@ -734,27 +817,29 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import {
-  backendOptions,
-  defaultImageWorkbenchConfig,
-  exportImageWorkbenchConfigJson,
-  exportImageWorkbenchPresetStoreJson,
-  getActiveImageWorkbenchPreset,
-  importImageWorkbenchConfigJson,
-  importImageWorkbenchPresetStoreJson,
-  loadImageWorkbenchPresetStore,
-  removeImageWorkbenchPreset,
-  resolutionPresets,
-  saveImageWorkbenchConfig,
-  saveImageWorkbenchPresetStore,
-  setActiveImageWorkbenchPreset,
-  stylePresets,
-  upsertImageWorkbenchPreset,
-  type BackendType,
-  type ConfigSectionKey,
-  type ImageWorkbenchConfig,
-  type ImageWorkbenchPreset,
-  type ImageWorkbenchPresetStore,
+    backendOptions,
+    defaultImageWorkbenchConfig,
+    exportImageWorkbenchConfigJson,
+    exportImageWorkbenchPresetStoreJson,
+    getActiveImageWorkbenchPreset,
+    importImageWorkbenchConfigJson,
+    importImageWorkbenchPresetStoreJson,
+    loadImageWorkbenchPresetStore,
+    removeImageWorkbenchPreset,
+    resolutionPresets,
+    saveImageWorkbenchConfig,
+    saveImageWorkbenchPresetStore,
+    setActiveImageWorkbenchPreset,
+    stylePresets,
+    upsertImageWorkbenchPreset,
+    type BackendType,
+    type ConfigSectionKey,
+    type ImageWorkbenchConfig,
+    type ImageWorkbenchPreset,
+    type ImageWorkbenchPresetStore,
 } from './config';
+import { showWorkbenchToast } from './notifications';
+import { generateImageDirectly } from './runtime/service';
 
 const navItems: Array<{ key: ConfigSectionKey; label: string; desc: string; icon: string }> = [
   { key: 'api', label: 'API 接入', desc: '后端与认证', icon: 'fa-solid fa-server' },
@@ -773,7 +858,7 @@ type JsonFieldState = {
   value: Record<string, unknown>;
 };
 
-type ApiAction = 'idle' | 'testing' | 'models';
+type ApiAction = 'idle' | 'testing' | 'models' | 'image-test';
 
 type BackendPreset = {
   apiBaseUrl: string;
@@ -824,6 +909,40 @@ const NOVELAI_STATIC_MODELS = [
   { value: 'nai-diffusion-furry-3', label: 'Furry v3' },
 ] as const;
 
+const NOVELAI_DEFAULT_SAMPLER = 'k_dpmpp_2m';
+const NOVELAI_V4_DEFAULT_SAMPLER = 'k_euler_ancestral';
+const NOVELAI_DEFAULT_SCHEDULER = 'karras';
+const NOVELAI_V4_SAMPLER_OPTIONS = [
+  { value: 'k_euler_ancestral', label: 'Euler Ancestral' },
+  { value: 'k_euler', label: 'Euler' },
+  { value: 'ddim', label: 'DDIM' },
+] as const;
+const NOVELAI_LEGACY_SAMPLER_OPTIONS = [
+  { value: 'k_dpmpp_2m', label: 'DPM++ 2M' },
+  { value: 'k_euler_ancestral', label: 'Euler Ancestral' },
+  { value: 'k_euler', label: 'Euler' },
+  { value: 'ddim', label: 'DDIM' },
+] as const;
+const NOVELAI_SCHEDULER_OPTIONS = [
+  { value: 'karras', label: 'Karras' },
+  { value: 'native', label: 'Native' },
+  { value: 'exponential', label: 'Exponential' },
+  { value: 'polyexponential', label: 'Polyexponential' },
+] as const;
+const COMMON_SAMPLER_OPTIONS = [
+  { value: 'DPM++ 2M Karras', label: 'DPM++ 2M Karras' },
+  { value: 'DPM++ SDE Karras', label: 'DPM++ SDE Karras' },
+  { value: 'Euler a', label: 'Euler a' },
+  { value: 'Euler', label: 'Euler' },
+  { value: 'DDIM', label: 'DDIM' },
+] as const;
+const COMMON_SCHEDULER_OPTIONS = [
+  { value: 'karras', label: 'Karras' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'exponential', label: 'Exponential' },
+  { value: 'sgm_uniform', label: 'SGM Uniform' },
+] as const;
+
 const novelAiModelLabelMap = Object.fromEntries(NOVELAI_STATIC_MODELS.map(item => [item.value, item.label])) as Record<string, string>;
 
 const activeSection = ref<ConfigSectionKey>('api');
@@ -841,10 +960,28 @@ const connectionTestTone = ref<StatusTone>('info');
 const modelFetchMessage = ref('');
 const modelFetchTone = ref<StatusTone>('info');
 const modelOptions = ref<string[]>([]);
+const imageTestPrompt = ref('');
+const imageTestMessage = ref('');
+const imageTestTone = ref<StatusTone>('info');
+const imageTestImageUrl = ref('');
+const imageTestMeta = ref<{ durationMs: number; mimeType: string; byteLength?: number } | null>(null);
+const imageTestFinalPrompt = ref('');
+const imageTestNegativePrompt = ref('');
 
 const totalImageCount = computed(() => config.value.batchSize * config.value.batchCount);
 const apiBusy = computed(() => apiAction.value !== 'idle');
+const imageTestBusy = computed(() => apiAction.value === 'image-test');
 const isNovelAiBackend = computed(() => config.value.backendType === 'novelai');
+const samplerOptionsForCurrentBackend = computed(() =>
+  isNovelAiBackend.value
+    ? isNovelAiV4Model(config.value.model)
+      ? [...NOVELAI_V4_SAMPLER_OPTIONS]
+      : [...NOVELAI_LEGACY_SAMPLER_OPTIONS]
+    : [...COMMON_SAMPLER_OPTIONS],
+);
+const schedulerOptionsForCurrentBackend = computed(() =>
+  isNovelAiBackend.value ? [...NOVELAI_SCHEDULER_OPTIONS] : [...COMMON_SCHEDULER_OPTIONS],
+);
 const presetList = computed(() =>
   Object.values(presetStore.value.presets).sort((a, b) => {
     if (a.id === 'default') return -1;
@@ -952,6 +1089,141 @@ function gcd(a: number, b: number): number {
   return b === 0 ? a : gcd(b, a % b);
 }
 
+function containsCjk(text: string): boolean {
+  return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(text);
+}
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function appendPromptParts(parts: string[]): string {
+  return parts
+    .map(part => collapseWhitespace(part))
+    .filter(Boolean)
+    .join(', ');
+}
+
+function formatByteSize(byteLength: number): string {
+  if (!Number.isFinite(byteLength) || byteLength <= 0) {
+    return '0 B';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = byteLength;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = unitIndex === 0 ? 0 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function buildImageTestPrompt(input: string): { originalPrompt: string; finalPrompt: string; negativePrompt: string } {
+  const originalPrompt = collapseWhitespace(input);
+  if (!originalPrompt) {
+    throw new Error('请输入测试提示词后再发起生图。');
+  }
+
+  const promptParts = [config.value.promptPrefix, originalPrompt, config.value.promptSuffix];
+
+  if (config.value.autoInjectCharacterName && typeof SillyTavern !== 'undefined' && SillyTavern.name2) {
+    promptParts.push(`character focus: ${SillyTavern.name2}`);
+  }
+
+  if (config.value.enableTranslationHint && containsCjk(originalPrompt)) {
+    promptParts.push('best interpreted as a natural English image prompt');
+  }
+
+  return {
+    originalPrompt,
+    finalPrompt: appendPromptParts(promptParts),
+    negativePrompt: collapseWhitespace(config.value.negativePrompt),
+  };
+}
+
+function isNovelAiV4Model(model: string): boolean {
+  return /^nai-diffusion-4(?:-|$)/i.test(String(model || '').trim());
+}
+
+function getPreferredNovelAiSampler(model: string): string {
+  return isNovelAiV4Model(model) ? NOVELAI_V4_DEFAULT_SAMPLER : NOVELAI_DEFAULT_SAMPLER;
+}
+
+function shouldAutoUpgradeNovelAiSampler(input: string, model: string): boolean {
+  const value = String(input || '').trim().toLowerCase();
+  if (!value) {
+    return true;
+  }
+
+  if (!isNovelAiV4Model(model)) {
+    return false;
+  }
+
+  return ['dpm++ 2m karras', 'dpm++ 2m', 'dpmpp 2m karras', 'dpmpp 2m', 'k_dpmpp_2m'].includes(value);
+}
+
+function normalizeNovelAiSamplerInput(input: string, model = config.value.model): string {
+  const value = String(input || '').trim().toLowerCase();
+  const preferred = getPreferredNovelAiSampler(model);
+  if (!value) {
+    return preferred;
+  }
+
+  if (/^k_[a-z0-9_]+$/.test(value)) {
+    return value;
+  }
+
+  if (value.includes('dpm') && value.includes('2m')) {
+    return 'k_dpmpp_2m';
+  }
+  if (value.includes('euler') && (value.includes('ancestral') || value.includes('euler a'))) {
+    return 'k_euler_ancestral';
+  }
+  if (value === 'euler') {
+    return 'k_euler';
+  }
+  if (value === 'ddim') {
+    return 'ddim';
+  }
+
+  return preferred;
+}
+
+function normalizeNovelAiSchedulerInput(input: string): string {
+  const value = String(input || '').trim().toLowerCase();
+  if (!value) {
+    return NOVELAI_DEFAULT_SCHEDULER;
+  }
+
+  if (value.includes('native')) {
+    return 'native';
+  }
+  if (value.includes('poly')) {
+    return 'polyexponential';
+  }
+  if (value.includes('exponential')) {
+    return 'exponential';
+  }
+  if (value.includes('karras')) {
+    return 'karras';
+  }
+
+  return NOVELAI_DEFAULT_SCHEDULER;
+}
+
+function enforceNovelAiDefaults(forceSampler = false): void {
+  if (forceSampler || shouldAutoUpgradeNovelAiSampler(config.value.sampler, config.value.model)) {
+    config.value.sampler = getPreferredNovelAiSampler(config.value.model);
+  } else {
+    config.value.sampler = normalizeNovelAiSamplerInput(config.value.sampler, config.value.model);
+  }
+  config.value.scheduler = normalizeNovelAiSchedulerInput(config.value.scheduler);
+}
+
 function parseJsonObject(input: string): JsonFieldState {
   if (!input.trim()) {
     return {
@@ -1018,7 +1290,7 @@ function formatRequestError(status: number, data: unknown, fallback: string): st
   }
 
   if (data && typeof data === 'object') {
-    const message =
+    const message: unknown =
       _.get(data, 'detail.message') ??
       _.get(data, 'detail') ??
       _.get(data, 'message') ??
@@ -1092,6 +1364,9 @@ function applyBackendPreset(backend: BackendType): void {
   if (backend === 'novelai' && !config.value.model) {
     config.value.model = NOVELAI_STATIC_MODELS[0].value;
   }
+  if (backend === 'novelai') {
+    enforceNovelAiDefaults(true);
+  }
   connectionTestMessage.value = '';
   modelFetchMessage.value = '';
   showStatus(`已套用 ${backendOptions.find(item => item.value === backend)?.label ?? backend} 预设。`, 'info');
@@ -1103,6 +1378,7 @@ function syncBackendPresetOptions(): void {
     if (!config.value.model) {
       config.value.model = NOVELAI_STATIC_MODELS[0].value;
     }
+    enforceNovelAiDefaults();
   } else if (config.value.backendType !== 'custom') {
     modelOptions.value = [];
   }
@@ -1111,6 +1387,11 @@ function syncBackendPresetOptions(): void {
 async function testApiConnection(): Promise<void> {
   apiAction.value = 'testing';
   connectionTestMessage.value = '';
+  showWorkbenchToast('info', '正在测试当前 API 连通性。', {
+    title: '文生图配置',
+    dedupeKey: 'tti-test-api-connection-start',
+    timeOut: 1800,
+  });
 
   try {
     let url = '';
@@ -1142,6 +1423,11 @@ async function testApiConnection(): Promise<void> {
     }
 
     connectionTestMessage.value = successMessage;
+    showWorkbenchToast('success', successMessage, {
+      title: '文生图配置',
+      dedupeKey: `tti-test-api-connection-success-${config.value.backendType}`,
+      timeOut: 2600,
+    });
     showStatus(
       config.value.backendType === 'novelai' ? 'NovelAI 图像服务入口检测通过。' : 'API 连通性测试通过。',
       'ok',
@@ -1150,6 +1436,11 @@ async function testApiConnection(): Promise<void> {
     const message = normalizeBrowserFetchError(error, '测试失败，请检查地址、认证或跨域限制。');
     connectionTestTone.value = 'warn';
     connectionTestMessage.value = message;
+    showWorkbenchToast('warning', message, {
+      title: '文生图配置',
+      dedupeKey: `tti-test-api-connection-failed-${config.value.backendType}`,
+      timeOut: 4200,
+    });
     showStatus('API 连通性测试失败。', 'warn');
   } finally {
     apiAction.value = 'idle';
@@ -1205,6 +1496,94 @@ async function fetchModelList(): Promise<void> {
     modelFetchTone.value = 'warn';
     modelFetchMessage.value = message;
     showStatus('获取模型列表失败。', 'warn');
+  } finally {
+    apiAction.value = 'idle';
+  }
+}
+
+function clearImageTestResult(): void {
+  imageTestImageUrl.value = '';
+  imageTestMeta.value = null;
+  imageTestFinalPrompt.value = '';
+  imageTestNegativePrompt.value = '';
+  imageTestMessage.value = '';
+  imageTestTone.value = 'info';
+}
+
+async function runImageTestGeneration(): Promise<void> {
+  if (!extraHeadersState.value.valid || !extraPayloadState.value.valid) {
+    imageTestTone.value = 'warn';
+    imageTestMessage.value = '扩展 JSON 配置无效，请先修正“额外 Headers JSON / 额外 Payload JSON”。';
+    showStatus('测试生图前校验失败。', 'warn');
+    return;
+  }
+
+  let prompt: { originalPrompt: string; finalPrompt: string; negativePrompt: string };
+  try {
+    prompt = buildImageTestPrompt(imageTestPrompt.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '请输入测试提示词后再发起生图。';
+    imageTestTone.value = 'warn';
+    imageTestMessage.value = message;
+    showStatus('测试生图前校验失败。', 'warn');
+    return;
+  }
+
+  apiAction.value = 'image-test';
+  imageTestMessage.value = '';
+  showWorkbenchToast('info', '测试生图已开始。', {
+    title: '文生图测试',
+    dedupeKey: 'tti-image-test-start',
+    timeOut: 2000,
+  });
+
+  try {
+    const result = await generateImageDirectly({
+      messageId: Date.now(),
+      slotId: 'config-test',
+      originalPrompt: prompt.originalPrompt,
+      finalPrompt: prompt.finalPrompt,
+      negativePrompt: prompt.negativePrompt,
+      contextHint: '',
+      forceRegenerate: true,
+      config: {
+        ...config.value,
+        batchSize: 1,
+        batchCount: 1,
+      },
+    });
+
+    imageTestImageUrl.value = result.imageUrl;
+    imageTestMeta.value = {
+      durationMs: result.durationMs,
+      mimeType: result.mimeType,
+      byteLength: result.byteLength,
+    };
+    imageTestFinalPrompt.value = result.finalPrompt;
+    imageTestNegativePrompt.value = result.negativePrompt;
+    imageTestTone.value = 'ok';
+    imageTestMessage.value = `测试成功：${result.mimeType}${
+      typeof result.byteLength === 'number' ? `，${formatByteSize(result.byteLength)}` : ''
+    }，耗时 ${(result.durationMs / 1000).toFixed(2)} 秒。`;
+    showWorkbenchToast('success', '测试生图成功，结果已显示在当前面板。', {
+      title: '文生图测试',
+      dedupeKey: 'tti-image-test-success',
+      timeOut: 2600,
+    });
+    showStatus('测试生图成功。', 'ok');
+  } catch (error) {
+    imageTestTone.value = 'warn';
+    imageTestMessage.value = normalizeBrowserFetchError(error, '测试生图失败，请检查接口配置。');
+    imageTestImageUrl.value = '';
+    imageTestMeta.value = null;
+    imageTestFinalPrompt.value = '';
+    imageTestNegativePrompt.value = '';
+    showWorkbenchToast('error', imageTestMessage.value, {
+      title: '文生图测试',
+      dedupeKey: 'tti-image-test-failed',
+      timeOut: 5600,
+    });
+    showStatus('测试生图失败。', 'warn');
   } finally {
     apiAction.value = 'idle';
   }
@@ -1279,22 +1658,42 @@ async function saveConfig(): Promise<void> {
 
   if (result.savedToScript && result.savedToLocal) {
     loadSourceLabel.value = '脚本变量';
+    showWorkbenchToast('success', '配置已写入脚本变量，并同步保存到本地回退缓存。', {
+      title: '文生图配置',
+      dedupeKey: 'tti-save-config-script-local',
+      timeOut: 2600,
+    });
     showStatus('保存成功，已写入脚本变量和本地回退缓存。', 'ok');
     return;
   }
 
   if (result.savedToScript) {
     loadSourceLabel.value = '脚本变量';
+    showWorkbenchToast('warning', '配置已写入脚本变量，但本地回退缓存写入失败。', {
+      title: '文生图配置',
+      dedupeKey: 'tti-save-config-script-only',
+      timeOut: 4200,
+    });
     showStatus('已写入脚本变量，但本地回退缓存写入失败。', 'warn');
     return;
   }
 
   if (result.savedToLocal) {
     loadSourceLabel.value = '本地回退';
+    showWorkbenchToast('warning', '脚本变量写入失败，当前仅保存到本地回退缓存。', {
+      title: '文生图配置',
+      dedupeKey: 'tti-save-config-local-only',
+      timeOut: 4200,
+    });
     showStatus('脚本变量写入失败，仅保存到本地回退缓存。', 'warn');
     return;
   }
 
+  showWorkbenchToast('error', '配置保存失败，脚本变量和本地缓存都未写入。', {
+    title: '文生图配置',
+    dedupeKey: 'tti-save-config-failed',
+    timeOut: 5200,
+  });
   showStatus('保存失败，脚本变量和本地缓存都未写入。', 'warn');
 }
 
@@ -1444,6 +1843,14 @@ watch(
 watch(
   () => config.value.backendType,
   () => syncBackendPresetOptions(),
+);
+
+watch(
+  () => config.value.model,
+  () => {
+    if (!isNovelAiBackend.value) return;
+    enforceNovelAiDefaults();
+  },
 );
 
 onMounted(() => {
@@ -2159,6 +2566,61 @@ onMounted(() => {
   overflow: auto;
   font-size: 12px;
   line-height: 1.7;
+}
+
+.tti-test-result {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tti-test-result__image {
+  width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(2, 6, 10, 0.85);
+}
+
+.tti-test-result__meta {
+  color: var(--tti-muted);
+  font-size: 12px;
+}
+
+.tti-test-result__details summary {
+  cursor: pointer;
+  color: #bde2ff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tti-test-result__prompts {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.tti-test-result__prompts span {
+  color: var(--tti-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tti-test-result__prompts pre {
+  margin: 6px 0 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(5, 10, 16, 0.8);
+  color: #d5e8ff;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1280px) {

@@ -1,4 +1,5 @@
 import { loadImageWorkbenchConfig, type ImageWorkbenchConfig } from '../config';
+import { showWorkbenchToast } from '../notifications';
 import { generateImageDirectly } from './service';
 import type { GenerateImageResult, ImagePromptSlot } from './types';
 
@@ -81,7 +82,11 @@ export async function generateImageForSlot(
   const { finalPrompt, negativePrompt, contextHint } = buildFinalPrompt(slot.prompt, config, messageId);
   const totalAttempts = getTotalAttempts(config);
   const startAt = performance.now();
-  toastr.info(`第 ${messageId} 楼插图开始生成。`, '文生图');
+  showWorkbenchToast('info', `第 ${messageId} 楼插图开始生成。`, {
+    title: '文生图运行期',
+    dedupeKey: `tti-generate-start-${messageId}-${slot.slotId}`,
+    timeOut: 2200,
+  });
 
   let lastError: unknown = null;
 
@@ -99,10 +104,10 @@ export async function generateImageForSlot(
       });
 
       const durationMs = Math.round(performance.now() - startAt);
-      toastr.success(
-        `生成完成，用时 ${(durationMs / 1000).toFixed(1)} 秒。`,
-        '文生图',
-      );
+      showWorkbenchToast('success', `生成完成，用时 ${(durationMs / 1000).toFixed(1)} 秒。`, {
+        title: '文生图运行期',
+        dedupeKey: `tti-generate-success-${messageId}-${slot.slotId}`,
+      });
 
       return {
         ...result,
@@ -113,13 +118,21 @@ export async function generateImageForSlot(
       lastError = error;
       if (attempt < totalAttempts) {
         const message = error instanceof Error ? error.message : '未知错误';
-        toastr.warning(`第 ${attempt} 次尝试失败：${message}，准备重试。`, '文生图');
+        showWorkbenchToast('warning', `第 ${attempt} 次尝试失败：${message}，准备重试。`, {
+          title: '文生图运行期',
+          dedupeKey: `tti-generate-retry-${messageId}-${slot.slotId}-${attempt}`,
+          timeOut: 4200,
+        });
         await delay(config.retryIntervalMs);
       }
     }
   }
 
   const message = lastError instanceof Error ? lastError.message : '生图失败。';
-  toastr.error(message, '文生图');
+  showWorkbenchToast('error', message, {
+    title: '文生图运行期',
+    dedupeKey: `tti-generate-error-${messageId}-${slot.slotId}`,
+    timeOut: 5600,
+  });
   throw new Error(message);
 }
